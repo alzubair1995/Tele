@@ -1,5 +1,7 @@
 import os
 import asyncio
+import threading
+from flask import Flask
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
@@ -21,9 +23,8 @@ def validate_env():
     if missing:
         raise RuntimeError(f"Missing env vars: {', '.join(missing)}")
 
-async def main():
+async def telethon_worker():
     validate_env()
-
     client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
     @client.on(events.NewMessage(incoming=True))
@@ -34,14 +35,33 @@ async def main():
         except Exception as e:
             print("❌ Error:", e)
 
-    print("🚀 Telegram Forwarder Started...")
-    await client.start()  # لن يطلب أي إدخال لأن السيشن جاهزة
+    print("🚀 Telethon worker started...")
+    await client.start()
     await client.run_until_disconnected()
 
+def start_telethon_in_thread():
+    def runner():
+        try:
+            asyncio.run(telethon_worker())
+        except Exception as e:
+            print("❌ Telethon FATAL:", repr(e))
+            raise
+
+    t = threading.Thread(target=runner, daemon=True)
+    t.start()
+
+# --- Flask web server (for Render port binding) ---
+app = Flask(__name__)
+
+@app.get("/")
+def home():
+    return "OK - tele-swrt is running", 200
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}, 200
+
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except Exception as e:
-        # حتى لو Render ما يطبع Traceback طبيعي، هذا يضمن ظهور السبب
-        print("❌ FATAL:", repr(e))
-        raise
+    start_telethon_in_thread()
+    port = int(os.environ.get("PORT", "10000"))
+    app.run(host="0.0.0.0", port=port)
